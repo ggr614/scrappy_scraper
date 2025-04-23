@@ -6,6 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import json
+import time
 
 # Headers with User-Agent
 headers = {
@@ -59,6 +60,7 @@ while unvisited and len(visited) < MAX_PAGES:
         continue
 
     print(f"Crawling: {current_url}")
+    time.sleep(1)
     html = fetch_page(current_url)
     if html:
         visited.add(current_url)
