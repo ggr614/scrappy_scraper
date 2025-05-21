@@ -32,6 +32,7 @@ PAGES_DIR         = os.path.join(BASE_DIR, "pages")
 MAPPING_FILE      = os.path.join(BASE_DIR, "mapping.jsonl")
 ERROR_FILE        = os.path.join(BASE_DIR, "errors.jsonl")
 ASSET_FILE        = os.path.join(BASE_DIR, "assets.jsonl")
+CHECKPOINT_FILE   = os.path.join(BASE_DIR, "checkpoint.json") # Added checkpoint file
 SEED_URL          = "https://utc.edu"
 DOMAIN            = "utc.edu"
 RATE_LIMIT_SECONDS= 1
@@ -77,13 +78,32 @@ session.headers.update({"User-Agent": USER_AGENT})
 
 # Initialize crawl queue
 queue = deque()
-if SEED_URL not in seen:
-    queue.append(SEED_URL)
-    seen.add(SEED_URL)
+checkpoint_loaded = False
+if os.path.exists(CHECKPOINT_FILE):
+    try:
+        with open(CHECKPOINT_FILE, "r", encoding="utf-8") as cf:
+            loaded_queue = json.load(cf)
+            queue.extend(loaded_queue) # Load URLs into the deque
+            for url_in_queue in loaded_queue: # Ensure all loaded URLs are in 'seen'
+                seen.add(url_in_queue)
+            print(f"Resuming crawl from checkpoint. {len(queue)} URLs loaded.")
+            checkpoint_loaded = True
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"Error loading checkpoint file {CHECKPOINT_FILE}: {e}. Starting fresh crawl.")
+
+if not checkpoint_loaded:
+    if SEED_URL not in seen:
+        queue.append(SEED_URL)
+        seen.add(SEED_URL)
+    print("Starting new crawl or resuming without checkpoint.")
 
 # Crawling loop
+PROCESSED_URLS_COUNT = 0 # Counter for periodic checkpoint saving
+CHECKPOINT_INTERVAL = 50 # Save every 50 URLs
+
 while queue:
     url = queue.popleft()
+    PROCESSED_URLS_COUNT += 1
     print(f"Crawling: {url}")
     # Rate limit
     time.sleep(RATE_LIMIT_SECONDS)
@@ -99,9 +119,25 @@ while queue:
             # Save HTML
             hash_name = hashlib.md5(url.encode("utf-8")).hexdigest() + ".html"
             rel_path = os.path.join("pages", hash_name)
-            full_path = os.path.join(BASE_DIR, rel_path)
-            with open(full_path, "w", encoding="utf-8") as f:
-                f.write(html)
+            full_path = os.path.join(PAGES_DIR, hash_name) # Corrected: Use PAGES_DIR directly
+            
+            write_content = True
+            if os.path.exists(full_path):
+                with open(full_path, "r", encoding="utf-8") as f_old:
+                    old_html = f_old.read()
+                if old_html == html:
+                    write_content = False
+                    print(f"Content unchanged for {url}, not overwriting.") # Optional logging
+            
+            if write_content:
+                file_existed_before_write = os.path.exists(full_path) # Check before writing
+                with open(full_path, "w", encoding="utf-8") as f:
+                    f.write(html)
+                if not file_existed_before_write:
+                     print(f"New file created for {url} at {full_path}")
+                else:
+                     print(f"File updated for {url} at {full_path}")
+            
             # Record mapping (url, file, title)
             with open(MAPPING_FILE, "a", encoding="utf-8") as mf:
                 mf.write(json.dumps({
@@ -143,5 +179,22 @@ while queue:
         # Log exceptions
         with open(ERROR_FILE, "a", encoding="utf-8") as ef:
             ef.write(json.dumps({"url": url, "error": str(e)}) + "\n")
+    
+    # Periodically save checkpoint
+    if PROCESSED_URLS_COUNT % CHECKPOINT_INTERVAL == 0:
+        try:
+            with open(CHECKPOINT_FILE, "w", encoding="utf-8") as cf:
+                json.dump(list(queue), cf) # Save current queue state
+            print(f"Checkpoint saved. {len(queue)} URLs in queue.")
+        except IOError as e:
+            print(f"Error saving checkpoint file {CHECKPOINT_FILE}: {e}")
 
-print("Crawl complete.")
+# Crawl complete, clear checkpoint
+if os.path.exists(CHECKPOINT_FILE):
+    try:
+        os.remove(CHECKPOINT_FILE)
+        print(f"Crawl complete. Checkpoint file {CHECKPOINT_FILE} removed.")
+    except OSError as e:
+        print(f"Error removing checkpoint file {CHECKPOINT_FILE}: {e}")
+else:
+    print("Crawl complete.")
