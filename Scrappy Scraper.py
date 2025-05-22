@@ -9,10 +9,7 @@ import json
 import time
 
 # Headers with User-Agent
-headers = {
-    "User-Agent": "ChattUTC/1.0"
-}
-
+#TODO Pull from .env
 # Track URLs
 visited = set()
 unvisited = set(["https://www.utc.edu"])
