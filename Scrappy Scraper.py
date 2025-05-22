@@ -10,7 +10,7 @@ import time
 
 # Headers with User-Agent
 headers = {
-    "User-Agent": "ChattUTC/1.0"
+    "User-Agent": ""
 }
 
 # Track URLs
