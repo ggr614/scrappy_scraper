@@ -177,3 +177,5 @@ cython_debug/
 *.html
 *.json
 /scrappy
+/clearpaths_pdfs
+clearpaths_scraper.py
