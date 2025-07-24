@@ -141,4 +141,4 @@ Contributions & suggestions welcome — open an issue or PR! \:rocket:
 
 ## License
 
-MIT – see `LICENSE` for details.
+APACHE – see `LICENSE` for details.
