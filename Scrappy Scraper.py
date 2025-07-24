@@ -7,10 +7,14 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import json
 import time
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
+useragent = os.getenv("USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
 # Headers with User-Agent
 headers = {
-    "User-Agent": "ChattUTC/1.0"
+    "User-Agent": f"{useragent}"
 }
 
 # Track URLs
