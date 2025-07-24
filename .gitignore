@@ -173,3 +173,7 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 *.jsonl
+/crawl_data
+*.html
+*.json
+/scrappy
