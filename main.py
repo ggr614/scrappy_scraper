@@ -22,6 +22,8 @@ from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+
+
 # Load environment variables from .env (USER_AGENT expected)
 load_dotenv()
 USER_AGENT = os.getenv("USER_AGENT", "utc-crawler/1.0")
