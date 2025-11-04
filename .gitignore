@@ -179,3 +179,7 @@ cython_debug/
 /scrappy
 /clearpaths_pdfs
 clearpaths_scraper.py
+*.xlsx
+*.sh
+CLAUDE.md
+scheduled_crawler.py
