@@ -183,3 +183,5 @@ clearpaths_scraper.py
 *.sh
 CLAUDE.md
 scheduled_crawler.py
+DEPLOYMENT.md
+monitor_crawler.py

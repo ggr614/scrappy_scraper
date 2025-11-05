@@ -212,7 +212,10 @@ class Crawler:
                 try:
                     resp = self.session.get(url, timeout=self.timeout)
                 except Exception as exc:  # noqa: BLE001
-                    self._append_jsonl(self.error_file, {"url": url, "error": str(exc)})
+                    error_msg = str(exc)
+                    # Log the error with URL for debugging
+                    self._append_jsonl(self.error_file, {"url": url, "error": error_msg})
+                    print(f"Error fetching {url}: {error_msg}")
                     continue
 
                 if resp.status_code != 200:
@@ -273,8 +276,14 @@ class Crawler:
                 # ----------------------------------------------------------------
                 for tag in soup.find_all("a", href=True):
                     href = tag["href"].strip()
-                    abs_url = canonicalise_url(urljoin(url, href))
-                    parsed = urlparse(abs_url)
+                    try:
+                        abs_url = canonicalise_url(urljoin(url, href))
+                        parsed = urlparse(abs_url)
+                    except (ValueError, Exception) as exc:
+                        # Skip malformed URLs (e.g., invalid IPv6)
+                        print(f"Skipping malformed URL '{href}' on {url}: {exc}")
+                        continue
+
                     if parsed.scheme not in ("http", "https"):
                         continue
                     if parsed.netloc != self.domain:
