@@ -37,6 +37,7 @@ from urllib.parse import (parse_qsl, urlencode, urljoin, urlparse,
 
 import requests
 from bs4 import BeautifulSoup, Comment
+from bs4.exceptions import ParserRejectedMarkup
 from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -209,123 +210,150 @@ class Crawler:
                 self.queued.discard(url)
                 time.sleep(self.rate_limit)
 
+                # Wrap entire page processing to prevent crashes
                 try:
-                    resp = self.session.get(url, timeout=self.timeout)
-                except Exception as exc:  # noqa: BLE001
-                    error_msg = str(exc)
-                    # Log the error with URL for debugging
-                    self._append_jsonl(self.error_file, {"url": url, "error": error_msg})
-                    print(f"Error fetching {url}: {error_msg}")
-                    continue
-
-                if resp.status_code != 200:
-                    self._append_jsonl(
-                        self.error_file,
-                        {"url": url, "error": f"status_code {resp.status_code}"},
-                    )
-                    continue
-
-                html = resp.text
-                text = clean_text(html)
-                content_hash = sha256(text)
-                is_new_doc = content_hash not in self.seen_hashes
-
-                # Only increase counters/save if it's genuinely new
-                if is_new_doc:
-                    self.seen_hashes.add(content_hash)
-                    self.downloaded += 1
-
-                soup = BeautifulSoup(html, "html.parser")
-                title = soup.title.string.strip() if soup.title and soup.title.string else ""
-                h1 = soup.h1.get_text(strip=True) if soup.h1 else ""
-                meta_tag = soup.find("meta", attrs={"name": "description"})
-                meta_description = meta_tag.get("content", "").strip() if meta_tag else ""
-
-                # ----------------------------------------------------------------
-                # Save new document (HTML + JSON metadata)
-                # ----------------------------------------------------------------
-                if is_new_doc:
-                    html_name = f"{content_hash}.html"
-                    html_path = os.path.join(self.pages_dir, html_name)
-                    with open(html_path, "w", encoding="utf-8") as fh:
-                        fh.write(html)
-
-                    meta_path = os.path.join(self.pages_dir, f"{content_hash}.json")
-                    metadata: Dict = {
-                        "url": url,
-                        "file": os.path.join("pages", html_name),
-                        "crawl_ts": datetime.now(timezone.utc).isoformat(),
-                        "status": resp.status_code,
-                        "headers": {
-                            "etag": resp.headers.get("ETag"),
-                            "last_modified": resp.headers.get("Last-Modified"),
-                            "content_type": resp.headers.get("Content-Type"),
-                            "content_length": resp.headers.get("Content-Length"),
-                        },
-                        "title": title,
-                        "h1": h1,
-                        "meta_description": meta_description,
-                        "content_hash": content_hash,
-                        "links": [],
-                        "assets": [],
-                        "text": text,
-                    }
-
-                # ----------------------------------------------------------------
-                # Link & asset extraction
-                # ----------------------------------------------------------------
-                for tag in soup.find_all("a", href=True):
-                    href = tag["href"].strip()
                     try:
-                        abs_url = canonicalise_url(urljoin(url, href))
-                        parsed = urlparse(abs_url)
-                    except (ValueError, Exception) as exc:
-                        # Skip malformed URLs (e.g., invalid IPv6)
-                        print(f"Skipping malformed URL '{href}' on {url}: {exc}")
+                        resp = self.session.get(url, timeout=self.timeout)
+                    except Exception as exc:  # noqa: BLE001
+                        error_msg = str(exc)
+                        # Log the error with URL for debugging
+                        self._append_jsonl(self.error_file, {"url": url, "error": error_msg})
+                        print(f"Error fetching {url}: {error_msg}")
                         continue
 
-                    if parsed.scheme not in ("http", "https"):
-                        continue
-                    if parsed.netloc != self.domain:
+                    if resp.status_code != 200:
+                        self._append_jsonl(
+                            self.error_file,
+                            {"url": url, "error": f"status_code {resp.status_code}"},
+                        )
                         continue
 
-                    if abs_url.lower().endswith(
-                        (".jpg", ".jpeg", ".png", ".gif", ".css", ".js", ".svg", ".pdf", ".zip", ".rar", ".ico")
-                    ):
+                    html = resp.text
+
+                    # Parse HTML and extract content
+                    try:
+                        text = clean_text(html)
+                        content_hash = sha256(text)
+                        is_new_doc = content_hash not in self.seen_hashes
+
+                        # Only increase counters/save if it's genuinely new
                         if is_new_doc:
-                            metadata["assets"].append(abs_url)  # type: ignore[index]
+                            self.seen_hashes.add(content_hash)
+                            self.downloaded += 1
+
+                        soup = BeautifulSoup(html, "html.parser")
+                        title = soup.title.string.strip() if soup.title and soup.title.string else ""
+                        h1 = soup.h1.get_text(strip=True) if soup.h1 else ""
+                        meta_tag = soup.find("meta", attrs={"name": "description"})
+                        meta_description = meta_tag.get("content", "").strip() if meta_tag else ""
+                    except (ParserRejectedMarkup, Exception) as exc:
+                        # Skip pages with malformed HTML or binary content
+                        error_msg = f"Parser error: {type(exc).__name__} - {str(exc)[:100]}"
+                        self._append_jsonl(self.error_file, {"url": url, "error": error_msg})
+                        print(f"Skipping unparseable content at {url}: {type(exc).__name__}")
                         continue
 
-                    self._enqueue(abs_url)
+                    # ----------------------------------------------------------------
+                    # Save new document (HTML + JSON metadata)
+                    # ----------------------------------------------------------------
                     if is_new_doc:
-                        metadata["links"].append(abs_url)  # type: ignore[index]
+                        html_name = f"{content_hash}.html"
+                        html_path = os.path.join(self.pages_dir, html_name)
+                        with open(html_path, "w", encoding="utf-8") as fh:
+                            fh.write(html)
 
-                # Persist mapping & per-page JSON
-                if is_new_doc:
-                    with open(meta_path, "w", encoding="utf-8") as fm:
-                        json.dump(metadata, fm, ensure_ascii=False, indent=2)
-
-                    self._append_jsonl(
-                        self.mapping_file,
-                        {
+                        meta_path = os.path.join(self.pages_dir, f"{content_hash}.json")
+                        metadata: Dict = {
                             "url": url,
                             "file": os.path.join("pages", html_name),
+                            "crawl_ts": datetime.now(timezone.utc).isoformat(),
+                            "status": resp.status_code,
+                            "headers": {
+                                "etag": resp.headers.get("ETag"),
+                                "last_modified": resp.headers.get("Last-Modified"),
+                                "content_type": resp.headers.get("Content-Type"),
+                                "content_length": resp.headers.get("Content-Length"),
+                            },
                             "title": title,
+                            "h1": h1,
+                            "meta_description": meta_description,
                             "content_hash": content_hash,
-                        },
-                    )
+                            "links": [],
+                            "assets": [],
+                            "text": text,
+                        }
 
-                # Mark as fully visited AFTER processing links
-                self.visited.add(url)
+                    # ----------------------------------------------------------------
+                    # Link & asset extraction
+                    # ----------------------------------------------------------------
+                    for tag in soup.find_all("a", href=True):
+                        href = tag["href"].strip()
+                        try:
+                            abs_url = canonicalise_url(urljoin(url, href))
+                            parsed = urlparse(abs_url)
+                        except (ValueError, Exception) as exc:
+                            # Skip malformed URLs (e.g., invalid IPv6)
+                            print(f"Skipping malformed URL '{href}' on {url}: {exc}")
+                            continue
 
-                # Periodically checkpoint the frontier and progress
-                if self.downloaded % 50 == 0 and self.downloaded:
-                    self._save_frontier()
-                    print(f"Checkpoint – downloaded {self.downloaded} pages, queue={len(self.queue)}")
+                        if parsed.scheme not in ("http", "https"):
+                            continue
+                        if parsed.netloc != self.domain:
+                            continue
+
+                        if abs_url.lower().endswith(
+                            (".jpg", ".jpeg", ".png", ".gif", ".css", ".js", ".svg", ".pdf", ".zip", ".rar", ".ico")
+                        ):
+                            if is_new_doc:
+                                metadata["assets"].append(abs_url)  # type: ignore[index]
+                            continue
+
+                        self._enqueue(abs_url)
+                        if is_new_doc:
+                            metadata["links"].append(abs_url)  # type: ignore[index]
+
+                    # Persist mapping & per-page JSON
+                    if is_new_doc:
+                        with open(meta_path, "w", encoding="utf-8") as fm:
+                            json.dump(metadata, fm, ensure_ascii=False, indent=2)
+
+                        self._append_jsonl(
+                            self.mapping_file,
+                            {
+                                "url": url,
+                                "file": os.path.join("pages", html_name),
+                                "title": title,
+                                "content_hash": content_hash,
+                            },
+                        )
+
+                    # Mark as fully visited AFTER processing links
+                    self.visited.add(url)
+
+                    # Periodically checkpoint the frontier and progress
+                    if self.downloaded % 50 == 0 and self.downloaded:
+                        try:
+                            self._save_frontier()
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"Warning: Failed to save frontier checkpoint: {exc}")
+                        print(f"Checkpoint – downloaded {self.downloaded} pages, queue={len(self.queue)}")
+
+                except Exception as exc:  # noqa: BLE001
+                    # Catch-all for any unexpected errors during page processing
+                    error_msg = f"Unexpected error: {type(exc).__name__} - {str(exc)[:100]}"
+                    try:
+                        self._append_jsonl(self.error_file, {"url": url, "error": error_msg})
+                    except Exception:  # noqa: BLE001
+                        pass  # If we can't even log, just continue
+                    print(f"Unexpected error processing {url}: {type(exc).__name__}")
+                    continue
 
         finally:
             # Always persist frontier on termination
-            self._save_frontier()
+            try:
+                self._save_frontier()
+            except Exception as exc:  # noqa: BLE001
+                print(f"Warning: Failed to save final frontier state: {exc}")
             print(
                 f"Crawl complete – downloaded {self.downloaded} new unique pages. "
                 f"Errors logged: {self._error_count()}"
